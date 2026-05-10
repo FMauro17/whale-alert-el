@@ -36,6 +36,7 @@ x-airflow-common-env: &airflow-common-env
   PYTHONPATH: /opt/airflow
 
 x-airflow-common: &airflow-common
+  image: whale-alert-airflow:latest
   build:
     context: .
     dockerfile: Dockerfile

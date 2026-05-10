@@ -1,0 +1,176 @@
+# =============================================================================
+# Whale Alert EL Pipeline — Docker Compose
+# =============================================================================
+#
+# Services:
+#   postgres  — Airflow metadata database
+#   minio     — S3-compatible object storage
+#   airflow-init   — One-shot DB migration + admin user creation
+#   airflow-webserver
+#   airflow-scheduler
+#
+# Usage:
+#   1. cp .env.example .env  && edit .env
+#   2. docker compose up --build -d
+#   3. Open Airflow UI at http://localhost:8080  (admin / admin)
+#   4. Open MinIO console at http://localhost:9001
+# =============================================================================
+
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Shared environment — loaded from .env file
+# ---------------------------------------------------------------------------
+x-airflow-common-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+  AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+  # Pass MinIO and scraper config to every Airflow component
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+  MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+  WHALE_URL: ${WHALE_URL}
+  # Make src/ importable inside every Airflow container
+  PYTHONPATH: /opt/airflow
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment:
+    <<: *airflow-common-env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL — Airflow Metadata DB
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: whale-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # MinIO — Object Storage
+  # --------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: whale-minio
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # mc (MinIO Client) ships with the minio image and is the recommended way
+      # to health-check MinIO. Falls back to curl for older images.
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # Airflow Init — DB migration + admin user (runs once and exits)
+  # --------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: whale-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@whale-alert.local
+    restart: "no"
+
+  # --------------------------------------------------------------------------
+  # Airflow Webserver
+  # --------------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: whale-airflow-webserver
+    restart: unless-stopped
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # --------------------------------------------------------------------------
+  # Airflow Scheduler
+  # --------------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: whale-airflow-scheduler
+    restart: unless-stopped
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+# ---------------------------------------------------------------------------
+# Named volumes
+# ---------------------------------------------------------------------------
+volumes:
+  postgres-data:
+  minio-data:
+  airflow-logs:

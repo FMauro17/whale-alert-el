@@ -1,0 +1,36 @@
+# =============================================================================
+# Whale Alert EL Pipeline
+# =============================================================================
+
+# Ignore compiled Python files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment secrets — NEVER commit the real .env
+.env
+
+# Airflow runtime directories (created at runtime, managed via Docker volumes)
+logs/
+plugins/
+
+# IDE / editor artefacts
+.vscode/
+.idea/
+*.swp
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/

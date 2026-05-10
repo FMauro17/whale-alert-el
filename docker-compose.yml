@@ -37,9 +37,6 @@ x-airflow-common-env: &airflow-common-env
 
 x-airflow-common: &airflow-common
   image: whale-alert-airflow:latest
-  build:
-    context: .
-    dockerfile: Dockerfile
   env_file:
     - .env
   environment:
@@ -113,6 +110,9 @@ services:
   # --------------------------------------------------------------------------
   airflow-init:
     <<: *airflow-common
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: whale-airflow-init
     entrypoint: /bin/bash
     command:
